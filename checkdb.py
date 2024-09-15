@@ -96,7 +96,8 @@ def validate_table(table_name):
 	FROM information_schema.tables
 	WHERE table_schema = 'public'
 	AND table_name = %s
-);"""
+);
+"""
 	cursor.execute(sql, (table_name,))
 	log_sql_commands(sql, (table_name,))
 
@@ -109,8 +110,8 @@ def validate_columns(table_cols):
 	WHERE table_catalog = 'python_test'
 	AND table_schema = 'public'
 	AND table_name = %s
-	AND column_name = %s
-;"""
+	AND column_name = %s;
+"""
 
 	for tbl in table_cols:
 		columns = table_columns[tbl]
@@ -137,6 +138,73 @@ def validate_columns(table_cols):
 			return False
 	return True
 
+def get_keys(table_names, keys_dict):
+	#Extracts the primary key of a given table
+	sql_get_primary = """SELECT kcu.column_name
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu 
+	ON tc.constraint_name = kcu.constraint_name
+WHERE tc.constraint_type = 'PRIMARY KEY'
+  AND tc.table_name = %s;
+"""
+	#Extracts the foreign key(s) of a given table
+	sql_get_foreign = """SELECT
+  kcu.column_name AS fk_column,
+  ccu.table_name AS referenced_table,
+  ccu.column_name AS referenced_column
+FROM information_schema.table_constraints AS tc
+JOIN information_schema.key_column_usage AS kcu
+  ON tc.constraint_name = kcu.constraint_name
+JOIN information_schema.constraint_column_usage AS ccu
+  ON ccu.constraint_name = tc.constraint_name
+WHERE tc.constraint_type = 'FOREIGN KEY'
+  AND tc.table_name = %s;
+"""
+
+	for i in range(len(table_names)):
+		key_list = []
+		
+		cursor.execute(sql_get_primary, (table_names[i].lower(), ))
+		log_sql_commands(sql_get_primary, (table_names[i].lower(), ))
+		key_list.append(cursor.fetchall()[0][0])
+
+		cursor.execute(sql_get_foreign, (table_names[i].lower(), ))
+		log_sql_commands(sql_get_foreign, (table_names[i].lower(), ))
+		returned = cursor.fetchall()
+		if len(returned) > 0:
+			key_list.append(returned[0])
+
+		keys_dict[table_names[i]] = key_list
+
+	return keys_dict
+
+def referential_integrity(key_list):
+	integrity_list = []
+	for table in key_list:
+		if len(key_list[table]) > 1:
+			# cursor.execute(sql_query, (table.lower(), key_list[table][1][1], table.lower(), key_list[table][1][0], key_list[table][1][1], key_list[table][1][2]))  
+			child_table = table.lower()
+			child_column = key_list[table][1][0]
+			parent_column = key_list[table][1][2]
+			table = key_list[table][1][1]
+
+			sql_query = f"""SELECT COUNT(*)
+FROM {child_table} AS c
+LEFT JOIN {table} AS p
+ON c.{child_column} = p.{parent_column}
+WHERE p.{parent_column} IS NULL;
+"""
+			cursor.execute(sql_query)
+			log_sql_commands(sql_query, (child_table, table, child_column,parent_column, parent_column))
+			if(cursor.fetchone()[0] == 0):
+				integrity_list.append('Y')
+			else:
+				integrity_list.append('N')
+		else:
+			integrity_list.append('Y')
+
+	return integrity_list
+
 if __name__ == "__main__":
 	input_file = get_input_file()
 	connection()
@@ -144,6 +212,8 @@ if __name__ == "__main__":
 	table_names = []
 	lines = []
 	table_columns = {}
+	keys = {}
+	referential_integrity_list = []
 	#Table extraction
 	with open(input_file, 'r') as file:
 		for line in file:
@@ -165,6 +235,17 @@ if __name__ == "__main__":
     
 	print("All given columns exist...")
     # print(f"Using file: {input_file}")
+	keys = get_keys(table_names, keys)
+	
+	referential_integrity_list = referential_integrity(keys)
+
+	print(referential_integrity_list)
+
+	# print(keys)
+
+	# print(lines)
+	# print(table_names)
+	# print(table_columns)
     
 
 
