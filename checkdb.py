@@ -28,13 +28,17 @@ def connection():
 	global conn
 	print("Enter your postgres password...")
 	passwd = input()
-	conn = psycopg2.connect(host = "localhost", dbname="python_test", user = "postgres", password=passwd)
+	conn = psycopg2.connect(host = "127.0.0.1", dbname="python_test", user = "postgres", password=passwd)
 	cursor = conn.cursor()
 
-	with open("tc3.sql", 'r') as sql_file:
-		sql_commands = sql_file.read()
+	# with open("tc2.sql", 'r') as sql_file:
+	# 	sql_commands = sql_file.read()
+	# try: 
+	# 	cursor.execute(sql_commands)
+	# except psycopg2.DatabaseError as e: 
+	# 	print("Invalid PostgreSQL detected: ", e)
+	# 	sys.exit()
 
-	cursor.execute(sql_commands)
 	conn.commit()
      
 def close_connection():
@@ -83,7 +87,7 @@ def get_column_names(input_line, tbl_name):
 				column = ""
 		else:
 			if column != tbl_name and column != '':
-				column_names.append(column)
+				column_names.append(column.strip())
 				column = ""
 	return column_names
 
@@ -117,7 +121,7 @@ def validate_columns(table_cols):
 			if len(columns[i]) > 1:
 				for j in range(len(columns[i])):
 					col = columns[i]
-					if col[j] == 'p' or col[j] == 'f':
+					if col[j] == 'p' or col[j] == 'f' or col[j] == 'P' or col[j] == 'F':
 						col = col[:j]
 						columns[i] = col
 						break
@@ -174,7 +178,6 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 			key_list.append(returned[0])
 
 		keys_dict[table_names[i]] = key_list
-	print(keys_dict)
 	return keys_dict
 
 def referential_integrity(key_list):
@@ -212,6 +215,9 @@ def get_keys_from_input(columns_keys):
 			if 'pk' in sequence:
 				new_sequence = sequence.replace('pk', '')
 				keys[tbl] = [new_sequence]
+			elif 'PK' in sequence:
+				new_sequence = sequence.replace('PK', '')
+				keys[tbl] = [new_sequence]
 			elif 'fk' in sequence:
 				new_sequence = sequence.replace('fk', '')
 				new_sequence = new_sequence.split(':')
@@ -219,8 +225,90 @@ def get_keys_from_input(columns_keys):
 				key_tuple = (new_sequence[0], new_sequence[1][0], new_sequence[1][1])
 				keys[tbl] += [key_tuple]
 			# print(columns_and_keys[tbl][i])
-	print(keys)
 	return keys
+
+def get_non_primary_key_columns(columns_keys):
+	non_key_dict = {}
+	for tbl in columns_keys:
+		non_keys = []
+		for i in range(len(columns_keys[tbl])):
+			sequence = columns_keys[tbl][i]
+			if not 'pk' in sequence and not 'PK' in sequence:
+				if 'fk' in sequence:
+					index = sequence.index('fk')
+					sequence = sequence[:index]
+				elif 'FK' in sequence:
+					index = sequence.index('FK')
+					sequence = sequence[:index]
+				non_keys.append(sequence)
+		non_key_dict[tbl] = non_keys
+	return non_key_dict
+
+def check_3nf_bcnf(non_p_columns):
+	n_list = []
+	# print(non_p_columns)
+	for tbl in non_p_columns:
+		if len(non_p_columns[tbl]) > 1:
+			results_list = []
+			for i in range(len(non_p_columns[tbl])):
+				column = non_p_columns[tbl][i]
+				# if 'fk' in column:
+				# 	index = column.index('fk')
+				# 	column = column[:index]
+				# elif 'FK' in column:
+				# 	index = column.index('FK')
+				# 	column = column[:index]
+				for j in range(i + 1, len(non_p_columns[tbl])):
+					second_column = non_p_columns[tbl][j]
+					# if 'fk' in second_column or 'FK' in second_column:
+					# 	continue
+					if column != second_column:
+						sql_query = f"""SELECT {column}, COUNT(DISTINCT {second_column})
+FROM {tbl}
+GROUP BY {column}
+HAVING COUNT(DISTINCT {second_column}) > 1;
+"""
+						cursor.execute(sql_query)
+						log_sql_commands(sql_query, (column, second_column, tbl, column, second_column))
+						results_list.append(cursor.fetchone())
+			if None in results_list or len(results_list) == 0:
+				n_list.append('N')
+			else:
+				n_list.append('Y')
+		else:
+			n_list.append('Y')
+		# for i in range(len(non_p_columns[tbl])):
+	return n_list
+
+def format_output(filename, tables, referential_list, normalization_list):
+	filname_without_type = filename.replace('.txt', '')
+	with open(f'{filname_without_type}_output.txt', 'w') as file:
+		# Print filename
+		file.write(f"{filename}\n")
+		file.write("-" * 41)
+		file.write("\n")
+		# Print header
+		file.write(f"{'Table':<10} {'referential':^15} {'normalized':^15}\n")
+		file.write(f"{'':<10} {'integrity':^15} {'':<15}\n")
+		file.write("-" * 41)
+		file.write("\n")
+		# Process table data
+		for i in range(len(tables)):
+			file.write(f"{tables[i]:<10} {referential_list[i]:^15} {normalization_list[i]:^15}\n")
+		# Process DB summary
+		db_ref_integrity = 'Y'
+		for i in range(len(referential_list)):
+			if referential_list[i] == 'N':
+				db_ref_integrity = 'N'
+
+		db_normalized = 'Y'
+		for i in range(len(normalization_list)):
+			if normalization_list[i] == 'N':
+				db_normalized = 'N'
+		file.write("-" * 41)
+		file.write("\n")
+		file.write(f"{'DB referential integrity:':<30} {db_ref_integrity}\n")
+		file.write(f"{'DB normalized:':<30} {db_normalized}\n")
 
 if __name__ == "__main__":
 	input_file = get_input_file()
@@ -232,6 +320,8 @@ if __name__ == "__main__":
 	dbms_keys = {}
 	txt_file_keys = {}
 	referential_integrity_list = []
+	non_primary_key_columns = {}
+	normalization_list = []
 	#Table extraction
 	with open(input_file, 'r') as file:
 		for line in file:
@@ -242,45 +332,33 @@ if __name__ == "__main__":
 			if not validate_table(tbl):
 				sys.exit(f"Given table {tbl} does not exist in current schema.")
 
-	print("All given tables exist...")
+	# print("All given tables exist...")
 	#Table validity confirmed, moving onto column extraction
 	for i in range(len(lines)):
 		table_columns[table_names[i]] = get_column_names(lines[i], table_names[i])
 
 	columns_and_keys = copy.deepcopy(table_columns)
+	non_primary_key_columns = get_non_primary_key_columns(columns_and_keys)
 
 	#Validating Columns
 	if not validate_columns(table_columns):
 		sys.exit(f"Provided columns do not exist.")
-	print("All given columns exist...")
+	# print("All given columns exist...")
     # print(f"Using file: {input_file}")
 	dbms_keys = get_keys_from_dbms(table_names, dbms_keys)
 	txt_file_keys = get_keys_from_input(columns_and_keys)
 
 	if dbms_keys != txt_file_keys:
-		print("Discrepencies detected between DBMS keys and text file keys.")
-		print("Assumming full key data from input text file.")
+		# print("Discrepencies detected between DBMS keys and text file keys.")
+		# print("Assumming full key data from input text file.")
 		referential_integrity_list = referential_integrity(txt_file_keys)
 	else:
-		print("DBMS keys match input file keys.")
-		print("Using DBMS keys for key data.")
+		# print("DBMS keys match input file keys.")
+		# print("Using DBMS keys for key data.")
 		referential_integrity_list = referential_integrity(dbms_keys)
 
-	print(referential_integrity_list)
+	normalization_list = check_3nf_bcnf(non_primary_key_columns)
 
-	# print(keys)
-
-	# print(lines)
-	# print(table_names)
-	# print(table_columns)
-    
-
-
-
-# This here for referential integrity
-# 	sql_query = """SELECT COUNT(*) FROM T1
-# LEFT JOIN T2 ON T1.k2 = T2.k2;"""
-# 	cursor.execute(sql_query)
-# 	log_sql_commands(sql_query)
-# 	result = cursor.fetchone()
-# 	# print(f"Count result: {result[0]}")
+	# print("Referential Integrity: ",referential_integrity_list)
+	# print("Normalization: ",normalization_list)
+	format_output(input_file, table_names, referential_integrity_list, normalization_list)
