@@ -1,16 +1,9 @@
 import sys
 import os
 import psycopg2
+import copy
 
 first_log = True
-
-#Run below to create tables necessary for testing tc1.txt
-
-# with open("tc1.sql", 'r') as sql_file:
-#   sql_commands = sql_file.read()
-
-# cursor.execute(sql_commands)
-# conn.commit()
 
 def log_sql_commands(sql_command, param = (None,)):
 	param_ticker = 0
@@ -37,6 +30,12 @@ def connection():
 	passwd = input()
 	conn = psycopg2.connect(host = "localhost", dbname="python_test", user = "postgres", password=passwd)
 	cursor = conn.cursor()
+
+	with open("tc3.sql", 'r') as sql_file:
+		sql_commands = sql_file.read()
+
+	cursor.execute(sql_commands)
+	conn.commit()
      
 def close_connection():
 	cursor.close()
@@ -112,9 +111,8 @@ def validate_columns(table_cols):
 	AND table_name = %s
 	AND column_name = %s;
 """
-
 	for tbl in table_cols:
-		columns = table_columns[tbl]
+		columns = table_cols[tbl]
 		for i in range(len(columns)):
 			if len(columns[i]) > 1:
 				for j in range(len(columns[i])):
@@ -124,7 +122,6 @@ def validate_columns(table_cols):
 						columns[i] = col
 						break
 		# print(tbl)
-		# print(columns)
 		cursor_fetches = []
 		for i in range(len(columns)):
 			# print(columns[i])
@@ -138,7 +135,7 @@ def validate_columns(table_cols):
 			return False
 	return True
 
-def get_keys(table_names, keys_dict):
+def get_keys_from_dbms(table_names, keys_dict):
 	#Extracts the primary key of a given table
 	sql_get_primary = """SELECT kcu.column_name
 FROM information_schema.table_constraints tc
@@ -160,13 +157,15 @@ JOIN information_schema.constraint_column_usage AS ccu
 WHERE tc.constraint_type = 'FOREIGN KEY'
   AND tc.table_name = %s;
 """
-
 	for i in range(len(table_names)):
 		key_list = []
 		
 		cursor.execute(sql_get_primary, (table_names[i].lower(), ))
 		log_sql_commands(sql_get_primary, (table_names[i].lower(), ))
-		key_list.append(cursor.fetchall()[0][0])
+		try: 
+			key_list.append(cursor.fetchall()[0][0])
+		except: 
+			continue
 
 		cursor.execute(sql_get_foreign, (table_names[i].lower(), ))
 		log_sql_commands(sql_get_foreign, (table_names[i].lower(), ))
@@ -175,7 +174,7 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 			key_list.append(returned[0])
 
 		keys_dict[table_names[i]] = key_list
-
+	print(keys_dict)
 	return keys_dict
 
 def referential_integrity(key_list):
@@ -205,6 +204,24 @@ WHERE p.{parent_column} IS NULL;
 
 	return integrity_list
 
+def get_keys_from_input(columns_keys):
+	keys = {}
+	for tbl in columns_keys:
+		for i in range(len(columns_and_keys[tbl])):
+			sequence = columns_and_keys[tbl][i]
+			if 'pk' in sequence:
+				new_sequence = sequence.replace('pk', '')
+				keys[tbl] = [new_sequence]
+			elif 'fk' in sequence:
+				new_sequence = sequence.replace('fk', '')
+				new_sequence = new_sequence.split(':')
+				new_sequence[1] = new_sequence[1].split('.')
+				key_tuple = (new_sequence[0], new_sequence[1][0], new_sequence[1][1])
+				keys[tbl] += [key_tuple]
+			# print(columns_and_keys[tbl][i])
+	print(keys)
+	return keys
+
 if __name__ == "__main__":
 	input_file = get_input_file()
 	connection()
@@ -212,7 +229,8 @@ if __name__ == "__main__":
 	table_names = []
 	lines = []
 	table_columns = {}
-	keys = {}
+	dbms_keys = {}
+	txt_file_keys = {}
 	referential_integrity_list = []
 	#Table extraction
 	with open(input_file, 'r') as file:
@@ -229,15 +247,24 @@ if __name__ == "__main__":
 	for i in range(len(lines)):
 		table_columns[table_names[i]] = get_column_names(lines[i], table_names[i])
 
+	columns_and_keys = copy.deepcopy(table_columns)
+
 	#Validating Columns
 	if not validate_columns(table_columns):
 		sys.exit(f"Provided columns do not exist.")
-    
 	print("All given columns exist...")
     # print(f"Using file: {input_file}")
-	keys = get_keys(table_names, keys)
-	
-	referential_integrity_list = referential_integrity(keys)
+	dbms_keys = get_keys_from_dbms(table_names, dbms_keys)
+	txt_file_keys = get_keys_from_input(columns_and_keys)
+
+	if dbms_keys != txt_file_keys:
+		print("Discrepencies detected between DBMS keys and text file keys.")
+		print("Assumming full key data from input text file.")
+		referential_integrity_list = referential_integrity(txt_file_keys)
+	else:
+		print("DBMS keys match input file keys.")
+		print("Using DBMS keys for key data.")
+		referential_integrity_list = referential_integrity(dbms_keys)
 
 	print(referential_integrity_list)
 
